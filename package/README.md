@@ -11,11 +11,11 @@ You need Hermes Agent 0.21.2 or newer with Discord enabled, a private regular Di
 1. Install the reviewed package and enable it:
 
    ```sh
-   hermes plugins install https://github.com/potalora/pebble-ring-handoff#package --ref <full-40-character-commit-sha>
-   hermes plugins enable pebble-ring-handoff
+   PLUGIN_SHA=PASTE_40_CHARACTER_RELEASE_COMMIT_HERE
+   hermes plugins install 'https://github.com/potalora/pebble-ring-handoff#package' --ref "$PLUGIN_SHA" --force --enable
    ```
 
-   Once the catalog entry is merged, `hermes plugins install pebble-ring-handoff` can replace the first command.
+   Use the full commit SHA from the [latest release](https://github.com/potalora/pebble-ring-handoff/releases). The direct Git install needs `--force` because Hermes flags the documented tunnel and process-control code for review. Check the release and commit before running it. Once the catalog entry is merged, use `hermes plugins install pebble-ring-handoff --enable` instead; the catalog pin has maintainer review.
 
 2. Run setup with the Discord guild, channel, and approver user IDs:
 
