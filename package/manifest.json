@@ -1,0 +1,30 @@
+{
+  "format": 1,
+  "kind": "native-pebble-plugin-candidate",
+  "sha256": {
+    "__init__.py": "530624fd71d23f30c7fff895182a03858c3f120d0bcb264e513879cbfe7ced10",
+    "pebble_bridge/__init__.py": "716f74826432500601e37b97e0b968009a25f10249839115620da58b7331d9fa",
+    "pebble_bridge/admission_guard.py": "a10216a0a9641f21d788a4aec607683eba0fff8407a875697ac9a90ac3653723",
+    "pebble_bridge/audio.py": "3e883a9229ebec62d1ac2289aca521e40feb16c60974c3e86cf44c45ef4c7c15",
+    "pebble_bridge/audio_tools.py": "9c1f3c97d6f1b1e9222962bb17614200eb5ad743e34a16d06a42f1841a32a2ea",
+    "pebble_bridge/discord_ui.py": "dfcb3467110f5bab18cb0db752b9db930c7127e622875979f8f1a81423583cf6",
+    "pebble_bridge/hermes_port.py": "ba14ad2e97df00bed31e1e4713c610c8b31f45c986622b7ec62932cbd2c81ab7",
+    "pebble_bridge/human_threads.py": "bdcfc7038b6464f10993e176f59355407009db5491cf110b7ca135e4db731237",
+    "pebble_bridge/management.py": "76a501d300e99dfc76e223d13eba91753706509dd006071d12b9ba21e9406c4f",
+    "pebble_bridge/plugin.py": "8d53fa8ee0b57bc086b80f87fb8e2c9f77daa8c91f751dfead1d2000c11e3658",
+    "pebble_bridge/receiver.py": "7f0b9b964aba69718d76f9f17b692c20d7276aaf1003708ecdf0766764bea1fd",
+    "pebble_bridge/relay_store.py": "e8cf7c2a3745e22d198f2e6895c4eeb459f93446fe07206962658e4da121fe24",
+    "pebble_bridge/repository.py": "00b6b639489f84498fa3ef2c5c225f0d40c9a8202d1538603b6ec14901af8a7c",
+    "pebble_bridge/service.py": "a27409530f748d0d796a4ba311d8bec68033e1290d118b56dbce63fc54b2d872",
+    "pebble_bridge/thread_port.py": "ec6acf2355b3815b21c4b2439b5ed24e93deac6868254b409206afa1092dc778",
+    "pebble_bridge/thread_validation.py": "8b60e161eb85c85bfb7880af774358bc3d15218875c084f11de91fb2ab566d77",
+    "pebble_bridge/worker_health.py": "96f62bcc515c64c917088ccc860ee3367e88422f33d4e365ed42eed074117221",
+    "plugin.yaml": "545877a099db1e8e1f7b6959e406e59a3384c870572e2857851d93e5b07771c3",
+    "receiver-requirements.txt": "510a6493454fa1a2a8fde0a4435c4ca900fa7e39cd8520022fee51de515ac10a",
+    "scripts/pebble_quick_tunnel_watchdog.py": "e50a80d7357090b5c9540b12096d4a21c17eb852322e9d4dec41fdc383f4107d",
+    "scripts/run_receiver.py": "a280edb0a2b8a45bd6798adb21839842d12c026cab4a07602ecd2db406cd6f36",
+    "scripts/serve_receiver.py": "ce40ae5ef62eaad7ca9576d021524b2e95f3ad1bd13fa00adf077544babfe4b6",
+    "scripts/successor_health.py": "0854534dbba456431f153c8a7a3a09b44c7362d9e7958add46a4fd98e73385fd",
+    "skills/pebble/SKILL.md": "8ce2c187a013b86e8ec6720930c10ac112cf1fa9b57602fca198df7f26b63f82"
+  }
+}

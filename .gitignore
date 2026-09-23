@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.env
+.env.*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+.pebble-*/
+.pebble-receiver.json
+.pebble-runtime.env
+recordings/
+data/

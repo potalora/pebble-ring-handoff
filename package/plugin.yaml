@@ -1,0 +1,33 @@
+name: pebble-ring-handoff
+version: 3.0.1
+manifest_version: 2
+api_version: 1
+license: MIT
+description: Receive Pebble Ring captures and require one Discord approval before a Hermes turn.
+homepage: https://github.com/potalora/pebble-ring-handoff
+tags: [pebble, discord, voice]
+requires_hermes: ">=0.21.2"
+python_runtime: external
+provides_hooks: [pre_gateway_dispatch]
+provides_tools: [ring_get_audio, pebble_status]
+config_schema:
+  data_dir:
+    type: str
+    required: true
+    description: Absolute receiver data directory outside this plugin.
+  guild_id:
+    type: str
+    required: true
+    description: Exact Discord guild ID.
+  channel_id:
+    type: str
+    required: true
+    description: Exact private Ring channel ID.
+  approver_id:
+    type: str
+    required: true
+    description: Exact Discord user ID allowed to decide captures.
+  audio_retention_ms:
+    type: int
+    required: true
+    description: Local audio retention in milliseconds, up to 30 days.
