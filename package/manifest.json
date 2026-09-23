@@ -20,7 +20,7 @@
     "pebble_bridge/thread_port.py": "ec6acf2355b3815b21c4b2439b5ed24e93deac6868254b409206afa1092dc778",
     "pebble_bridge/thread_validation.py": "8b60e161eb85c85bfb7880af774358bc3d15218875c084f11de91fb2ab566d77",
     "pebble_bridge/worker_health.py": "96f62bcc515c64c917088ccc860ee3367e88422f33d4e365ed42eed074117221",
-    "plugin.yaml": "36516f3cb872fa698a7be140bdabb8ffdc5eb38262b686531a2bd6f5a12d45cc",
+    "plugin.yaml": "641063fe259103681eaa9206aae05ca5f30294224a123d5c66f9dd7f7d2bbff4",
     "receiver-requirements.txt": "510a6493454fa1a2a8fde0a4435c4ca900fa7e39cd8520022fee51de515ac10a",
     "scripts/pebble_quick_tunnel_watchdog.py": "df8b7c66ebf4131f30e7e70e9b04343ed1374bc1245c2e226d55da5639c0e358",
     "scripts/pebble_watchdog_job.py": "0c4b18bd9c0904e149baf66151a64ce23e12ec2c92742ba9507063d3715cafb0",

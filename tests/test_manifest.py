@@ -2,6 +2,13 @@
 import hashlib
 import json
 from pathlib import Path
+import re
+
+
+def test_manifest_is_accepted_by_hermes_0212_installer():
+    root = Path(__file__).resolve().parents[1] / 'package'
+    assert re.search(r'^manifest_version: 1$',
+                     (root / 'plugin.yaml').read_text(), re.MULTILINE)
 
 
 def test_manifest_hashes_match_runtime_files():
