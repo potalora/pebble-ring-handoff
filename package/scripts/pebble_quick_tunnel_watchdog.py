@@ -64,7 +64,12 @@ SQLITE_BUSY_TIMEOUT_SECONDS = 1.0
 # configurable script deadline; the packaged shell wrapper imposes none.
 RECOVERY_WAIT_BUDGET_SECONDS = 90.0
 MIN_RECOVERY_MARGIN_SECONDS = 5.0
-CLOUDFLARED = "/opt/data/bin/cloudflared"
+CLOUDFLARED = next(
+    (candidate for candidate in (
+        "/opt/data/bin/cloudflared", "/usr/local/bin/cloudflared", "/usr/bin/cloudflared")
+     if os.path.isfile(candidate) and os.access(candidate, os.X_OK)),
+    "/opt/data/bin/cloudflared",
+)
 LOOPBACK_ORIGIN = "http://127.0.0.1:8765"
 CODE_ROOT = Path(__file__).resolve().parents[1]
 STATUS_TIMEOUT_SECONDS = 5.0
