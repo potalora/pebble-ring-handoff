@@ -1,6 +1,6 @@
 name: pebble-ring-handoff
-version: 3.0.2
-manifest_version: 2
+version: 3.0.3
+manifest_version: 1
 api_version: 1
 license: MIT
 description: Receive Pebble Ring captures and require one Discord approval before a Hermes turn.
