@@ -91,7 +91,7 @@ def _load_watchdog(data_dir):
 def _quiet():
     # Existing helpers may raise with private context; never render it publicly.
     stack = contextlib.ExitStack()
-    output = stack.enter_context(open(os.devnull, 'w'))
+    output = stack.enter_context(open(os.devnull, 'w', encoding='utf-8'))
     stack.enter_context(contextlib.redirect_stdout(output))
     stack.enter_context(contextlib.redirect_stderr(output))
     return stack
@@ -245,9 +245,38 @@ def stop_ingress(data_dir, scope):
 def register_management(ctx, data_dir, scope):
     """Register operator CLI and a read-only discovery tool after config validation."""
     def setup(parser):
-        parser.add_argument('action', choices=('status', 'recover', 'stop-ingress'))
+        parser.add_argument('action', choices=('status', 'recover', 'stop-ingress', 'setup'))
+        parser.add_argument('--guild-id')
+        parser.add_argument('--channel-id')
+        parser.add_argument('--approver-id')
+        parser.add_argument('--runtime-root', type=Path)
+        parser.add_argument('--json', action='store_true')
 
     def command(args):
+        if args.action == 'setup':
+            from .setup import SetupError, guided_setup
+            try:
+                result = guided_setup(
+                    guild_id=args.guild_id, channel_id=args.channel_id,
+                    approver_id=args.approver_id, runtime_root=args.runtime_root,
+                    existing_data_dir=data_dir, existing_scope=scope)
+            except SetupError as exc:
+                print(f'Pebble setup stopped: {exc}')
+                return 1
+            if args.json:
+                print(json.dumps(result, sort_keys=True))
+            else:
+                print('Pebble receiver prepared.' if result['status'] != 'ingress-unverified'
+                      else 'Pebble receiver prepared; ingress is unverified.')
+                print(f"Hermes config: {result['config']}; watchdog: {result['watchdog']}.")
+                if result.get('watchdog_error'):
+                    print(f"Watchdog needs attention: {result['watchdog_error']}.")
+                if result['ingress_url']:
+                    print(f"Ring app webhook URL: {result['ingress_url']}")
+                print(f"Bearer token is saved in {result['token_file']} (not displayed).")
+                print('Restart the Hermes gateway through your host service manager, '
+                      'then set the Ring app URL and Bearer header and send a harmless capture.')
+            return 0 if result['status'] == 'setup-prepared' else 1
         action = {'status': status, 'recover': recover, 'stop-ingress': stop_ingress}[args.action]
         result = action(data_dir, scope)
         print(json.dumps(result, sort_keys=True))
@@ -258,7 +287,7 @@ def register_management(ctx, data_dir, scope):
             return json.dumps({'status': 'invalid-arguments'})
         return json.dumps(status(data_dir, scope), sort_keys=True)
 
-    ctx.register_cli_command(name='pebble', help='Observe Pebble, recover ingress, or stop owned ingress for an update',
+    ctx.register_cli_command(name='pebble', help='Set up Pebble, check status, recover ingress, or stop owned ingress',
                              setup_fn=setup, handler_fn=command)
     ctx.register_tool(name='pebble_status', toolset='pebble', handler=tool,
         schema={'name': 'pebble_status',
