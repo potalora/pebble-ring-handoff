@@ -6,6 +6,12 @@ import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 
 
+def native_versions_verified():
+    """Exact SDK pairs covered by the networkless native transport gate."""
+    return (discord.__version__, aiohttp.__version__) in {
+        ('2.7.1', '3.14.3'), ('2.7.1', '3.14.5')}
+
+
 class ClosedTransport(RuntimeError):
     def __init__(self, failure_code, uncertain=False, message=None):
         self.failure_code = failure_code
@@ -161,7 +167,7 @@ class ThreadPort:
                 and type(timeout) in (int, float) and 0 < timeout <= 15
                 and math.isfinite(timeout)):
             raise ClosedTransport('invalid_input') from None
-        if discord.__version__ != '2.7.1' or aiohttp.__version__ != '3.14.3':
+        if not native_versions_verified():
             raise ClosedTransport('unsupported_native') from None
         guild, parent, member, user = self._readback_cache(int(guild_id), int(parent_id))
         retained = self.native, self.state, self.http
@@ -239,7 +245,7 @@ class ThreadPort:
             evidence._claimed = True
         if self.creation_failure:
             raise ClosedTransport('http_429', message=self.creation_failure) from None
-        if discord.__version__ != '2.7.1' or aiohttp.__version__ != '3.14.3':
+        if not native_versions_verified():
             raise ClosedTransport('unsupported_native') from None
         if not (_snowflake(parent_id) and _snowflake(card_id)
                 and isinstance(name, str) and 1 <= len(name) <= 100

@@ -31,12 +31,12 @@ class HermesPort:
     def __init__(self, adapter: Any) -> None:
         self.adapter = adapter
         import inspect
-        from importlib.metadata import version
+        from .thread_port import native_versions_verified
 
         # These private seams are deliberately pinned, not a generic adapter API.
         # Runtime upgrades require the isolated behavioral gate to be rerun.
-        if version('discord.py') != '2.7.1':
-            raise RuntimeError('unverified Discord SDK version')
+        if not native_versions_verified():
+            raise RuntimeError('unverified Discord transport SDK versions')
         expected = {'_build_slash_event': ('interaction', 'text'),
                     '_session_key_profile': ('source',), 'handle_message': ('event',)}
         for name, parameters in expected.items():
