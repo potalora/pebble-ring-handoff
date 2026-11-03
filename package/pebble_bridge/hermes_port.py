@@ -57,7 +57,6 @@ class HermesPort:
         event = self.adapter._build_slash_event(interaction, text)
         event.source.scope_id = str(interaction.guild_id)
         event.allow_gateway_control = False
-        event.metadata = {**(event.metadata or {}), 'ring_capture_id': capture_id}
         return event
 
     def key(self, event: Any) -> str:
@@ -174,5 +173,4 @@ class HermesPort:
             message_id=card_message_id,
         )
         return MessageEvent(text=text, message_type=MessageType.TEXT, source=source,
-                            message_id=card_message_id, allow_gateway_control=False,
-                            metadata={'ring_capture_id': capture_id})
+                            message_id=card_message_id, allow_gateway_control=False)
