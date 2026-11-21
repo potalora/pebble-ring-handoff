@@ -28,7 +28,10 @@ else:
     from gateway.platforms.base import MessageEvent, MessageType
     from gateway.session import Platform, SessionSource
     from gateway.session_envelope import _event_clause, _validate_native
-    from hermes_state_runtime import RuntimeStoreError
+    try:
+        from persistence.core.errors import AuthorityRefusal as RuntimeStoreError
+    except ModuleNotFoundError:
+        from hermes_state_runtime import RuntimeStoreError
     NATIVE_ENVELOPE = True
 
 
