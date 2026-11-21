@@ -338,7 +338,12 @@ class RingService:
     def store(self):
         return RelayStore(self.data_dir, audio_retention_ms=self.audio_retention_ms)
 
-    def view(self, request):
+    def _verified_thread(self, store, request, route) -> bool:
+        return (route is not None and route.state == 'ready'
+                and route.thread_id is not None and route.thread_id == request.message_id
+                and store.thread_request(route.thread_id, **self.scope) == request)
+
+    def view(self, request, *, route=None, verified_thread: bool | None = None):
         view = discord.ui.View(timeout=None)
         for action, label in [('approve','Approve & run'),('reject','Reject'),('audio','Get audio')]:
             button = discord.ui.Button(label=label,
@@ -350,11 +355,12 @@ class RingService:
                                if action == 'audio' else
                                partial(self.decide, request.capture_id, action, request.nonce))
             view.add_item(button)
-        with self.store() as store:
-            route = store.get_route(request.capture_id)
-            verified = (route is not None and route.state == 'ready'
-                and route.thread_id is not None and route.thread_id == request.message_id
-                and store.thread_request(route.thread_id, **self.scope) == request)
+        if verified_thread is None:
+            with self.store() as store:
+                route = store.get_route(request.capture_id)
+                verified = self._verified_thread(store, request, route)
+        else:
+            verified = bool(verified_thread and route is not None and route.thread_id is not None)
         if verified:
             view.add_item(discord.ui.Button(label='Open conversation',
                 url=f'https://discord.com/channels/{request.guild_id}/{route.thread_id}'))
@@ -482,6 +488,10 @@ class RingService:
                 store.uncertain(request.capture_id)
             raise
 
+    def _poll_thread_candidates(self):
+        with self.store() as store:
+            return store.thread_candidates(**self.scope, now_ms=int(time.time()*1000))
+
     async def dispatch(self):
         try:
             while True:
@@ -490,8 +500,7 @@ class RingService:
                         del self._dispatch_runs[capture_id]
                         await run  # A failed turn still stops this worker for manual review.
                 if self.native.is_ready() and len(self._dispatch_runs) < MAX_PARALLEL_CAPTURE_TURNS:
-                    with self.store() as store:
-                        candidates = store.thread_candidates(**self.scope, now_ms=int(time.time()*1000))
+                    candidates = await asyncio.to_thread(self._poll_thread_candidates)
                     for request in candidates:
                         if len(self._dispatch_runs) >= MAX_PARALLEL_CAPTURE_TURNS:
                             break
@@ -524,15 +533,18 @@ class RingService:
         with self.store() as store:
             store.recover(**self.scope, now_ms=int(time.time()*1000))
             after = 0
-            while requests := store.cards(**self.scope, after=after):
-                for request in requests:
-                    route = store.get_route(request.capture_id)
+            while batch := store.cards_with_routes(**self.scope, after=after):
+                for request, route in batch:
                     if route is not None and route.attempt_started_at is not None:
                         self.known_thread_ids.add(request.message_id)
                         if route.thread_id is not None:
                             self.known_thread_ids.add(route.thread_id)
-                    self.native.add_view(self.view(request), message_id=int(request.message_id))
-                after = requests[-1].capture_id
+                    verified = self._verified_thread(store, request, route)
+                    self.native.add_view(
+                        self.view(request, route=route, verified_thread=verified),
+                        message_id=int(request.message_id),
+                    )
+                after = batch[-1][0].capture_id
         self.guard.install()
         self.task = asyncio.create_task(self.publish(), name='ring-successor-publisher')
         self.dispatch_task = asyncio.create_task(self.dispatch(), name='ring-successor-dispatcher')
@@ -548,6 +560,55 @@ class RingService:
                 creation_stopped=(self.thread_port.creation_failure is not None))
             await asyncio.sleep(5)
 
+    def _reconcile_snapshot(self, *, rendered: dict, creation_stopped: bool):
+        now_ms = int(time.time()*1000)
+        pending = []
+        with self.store() as store:
+            store.expire_due(**self.scope, now_ms=now_ms)
+            after = 0
+            while batch := store.cards_with_routes(**self.scope, after=after):
+                for request, route in batch:
+                    signature = (request.state, now_ms >= request.audio_expires_at,
+                        route.state if route else None, route.failure_code if route else None,
+                        route.thread_id if route else None, route.retry_not_before if route else None,
+                        creation_stopped)
+                    if rendered.get(request.capture_id) != signature:
+                        verified = self._verified_thread(store, request, route)
+                        pending.append((request, route, signature, verified))
+                after = batch[-1][0].capture_id
+            global_wait = (store.thread_global_retry_not_before(**self.scope, now_ms=now_ms)
+                           if pending else None)
+        return pending, global_wait
+
+    @staticmethod
+    def _card_matches_message(message, *, payload: dict, view: discord.ui.View) -> bool:
+        if getattr(message, 'content', '') not in ('', None):
+            return False
+        if [embed.to_dict() for embed in message.embeds] != [
+                embed.to_dict() for embed in payload['embeds']]:
+            return False
+        components = getattr(message, 'components', None)
+        if not isinstance(components, list) or len(components) != 1:
+            return False
+        row = components[0]
+        if not isinstance(row, discord.ActionRow):
+            return False
+        actual = []
+        for child in row.children:
+            if not isinstance(child, discord.Button):
+                return False
+            actual.append((
+                child.label, child.custom_id, bool(child.disabled),
+                child.url, getattr(child.style, 'value', child.style),
+            ))
+        expected = [
+            (item.label, item.custom_id, bool(item.disabled),
+             item.url, getattr(item.style, 'value', item.style))
+            for item in view.children
+            if isinstance(item, discord.ui.Button)
+        ]
+        return len(expected) == len(view.children) and actual == expected
+
     async def reconcile(self):
         # UI projection has no path to execution or authority renewal.
         while True:
@@ -555,28 +616,15 @@ class RingService:
             if not self.projection_failed:
                 try:
                     if self.native.is_ready():
-                        with self.store() as store:
-                            store.expire_due(**self.scope, now_ms=int(time.time()*1000))
-                        after = 0
-                        while True:
-                            with self.store() as store:
-                                requests = store.cards(**self.scope, after=after)
-                            if not requests:
-                                break
-                            for request in requests:
-                                with self.store() as store:
-                                    route = store.get_route(request.capture_id)
-                                creation_stopped = self.thread_port.creation_failure is not None
-                                signature = (request.state, int(time.time()*1000) >= request.audio_expires_at,
-                                    route.state if route else None, route.failure_code if route else None,
-                                    route.thread_id if route else None, route.retry_not_before if route else None,
-                                    creation_stopped)
-                                if self.rendered.get(request.capture_id) == signature:
-                                    continue
-                                with self.store() as store:
-                                    global_wait = store.thread_global_retry_not_before(
-                                        **self.scope, now_ms=int(time.time()*1000))
-                                if global_wait is not None or not self.thread_port.presentation_ready(
+                        creation_stopped = self.thread_port.creation_failure is not None
+                        pending, global_wait = await asyncio.to_thread(
+                            self._reconcile_snapshot,
+                            rendered=dict(self.rendered),
+                            creation_stopped=creation_stopped,
+                        )
+                        if global_wait is None:
+                            for request, route, signature, verified in pending:
+                                if not self.thread_port.presentation_ready(
                                         request.channel_id, card_id=request.message_id):
                                     continue
                                 async with self.thread_port.presentation_slot(
@@ -599,36 +647,48 @@ class RingService:
                                             route_failure_code=route.failure_code if route else None,
                                             retry_not_before=route.retry_not_before if route else None,
                                             creation_stopped=creation_stopped if route else False)
-                                        if not self.thread_port.presentation_ready(request.channel_id, card_id=request.message_id):
-                                            continue
-                                        await message.edit(**payload, view=self.view(request))
-                                        if not self.thread_port.presentation_ready(request.channel_id, card_id=request.message_id):
-                                            continue
-                                        confirmed = await channel.fetch_message(int(request.message_id))
-                                        if (confirmed.author.id != self.native.user.id or confirmed.attachments
-                                                or [embed.to_dict() for embed in confirmed.embeds] !=
-                                                   [embed.to_dict() for embed in payload['embeds']]):
-                                            raise RuntimeError('Ring UI edit readback failed')
+                                        view = self.view(request, route=route, verified_thread=verified)
+                                        if not self._card_matches_message(message, payload=payload, view=view):
+                                            if not self.thread_port.presentation_ready(request.channel_id, card_id=request.message_id):
+                                                continue
+                                            await message.edit(**payload, view=view)
+                                            if not self.thread_port.presentation_ready(request.channel_id, card_id=request.message_id):
+                                                continue
+                                            confirmed = await channel.fetch_message(int(request.message_id))
+                                            if (confirmed.author.id != self.native.user.id or confirmed.attachments
+                                                    or [embed.to_dict() for embed in confirmed.embeds] !=
+                                                       [embed.to_dict() for embed in payload['embeds']]):
+                                                raise RuntimeError('Ring UI edit readback failed')
                                     self.rendered[request.capture_id] = signature
-                            after = requests[-1].capture_id
                 except Exception:
                     self.projection_failed = True  # Terminal: notices only, never recovery.
             await asyncio.sleep(0.5)
 
+    def _run_cleanup_sync(self) -> int:
+        now = int(time.time()*1000)
+        with self.store() as store:
+            purge_expired_audio(store, scope=self.scope, now_ms=now)
+        return now
+
+    def _claim_card_sync(self):
+        now = int(time.time()*1000)
+        with self.store() as store:
+            if store.thread_global_retry_not_before(**self.scope, now_ms=now) is not None:
+                return None
+            return store.claim_card(**self.scope, now_ms=now, thread_mode=True)
+
+    def _claim_thread_creation_sync(self):
+        with self.store() as store:
+            return store.claim_thread_creation(**self.scope, now_ms=int(time.time()*1000))
+
     async def publish(self):
         while True:
             if self.native.is_ready():
-                with self.store() as store:
-                    if time.monotonic() >= self.next_cleanup:
-                        purge_expired_audio(store, scope=self.scope, now_ms=int(time.time()*1000))
-                        self.cleanup_at_ms = int(time.time()*1000)
-                        self.next_cleanup = time.monotonic() + 60
+                if time.monotonic() >= self.next_cleanup:
+                    self.cleanup_at_ms = await asyncio.to_thread(self._run_cleanup_sync)
+                    self.next_cleanup = time.monotonic() + 60
                 async with self.thread_port.presentation_slot(self.scope['channel_id']) as available:
-                    with self.store() as store:
-                        now = int(time.time()*1000)
-                        request = (store.claim_card(**self.scope, now_ms=now, thread_mode=True)
-                            if store.thread_global_retry_not_before(**self.scope, now_ms=now) is None
-                            and available else None)
+                    request = await asyncio.to_thread(self._claim_card_sync) if available else None
                     if request is not None:
                         channel = self.native.get_channel(int(self.scope['channel_id']))
                         if (channel is None or channel.type != discord.ChannelType.text
@@ -654,8 +714,7 @@ class RingService:
                             with self.store() as store:
                                 store.uncertain(request.capture_id)
                             raise
-                with self.store() as store:
-                    creation = store.claim_thread_creation(**self.scope, now_ms=int(time.time()*1000))
+                creation = await asyncio.to_thread(self._claim_thread_creation_sync)
                 if creation is not None:
                     self.known_thread_ids.add(creation.message_id)
                     create_started = False
