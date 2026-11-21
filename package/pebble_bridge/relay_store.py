@@ -54,21 +54,6 @@ class RelayStore:
             raise RuntimeError('unsupported bridge schema')
         self.db.execute('PRAGMA foreign_keys=ON')
         self.db.execute('PRAGMA synchronous=FULL')
-        self.db.execute('''CREATE TABLE IF NOT EXISTS relay_requests (
-            capture_id INTEGER PRIMARY KEY REFERENCES captures(id),
-            guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, approver_id TEXT NOT NULL,
-            transcript TEXT NOT NULL, digest TEXT NOT NULL, nonce TEXT NOT NULL,
-            expires_at INTEGER NOT NULL, audio_expires_at INTEGER NOT NULL,
-            state TEXT NOT NULL, message_id TEXT UNIQUE
-        )''')
-        self.db.execute('''CREATE TABLE IF NOT EXISTS relay_audio_grants (
-            capture_id INTEGER NOT NULL REFERENCES captures(id), actor_id TEXT NOT NULL,
-            guild_id TEXT NOT NULL, chat_id TEXT NOT NULL, message_id TEXT NOT NULL,
-            profile TEXT NOT NULL, kind TEXT NOT NULL, capture_channel_id TEXT NOT NULL,
-            expires_at INTEGER NOT NULL, used INTEGER NOT NULL,
-            PRIMARY KEY(message_id,kind)
-        )''')
-
         old_route_sql = """CREATE TABLE IF NOT EXISTS relay_threads (
             capture_id INTEGER PRIMARY KEY REFERENCES relay_requests(capture_id),
             thread_id TEXT UNIQUE,
@@ -82,28 +67,56 @@ class RelayStore:
             thread_id TEXT NOT NULL UNIQUE, reset_message_id TEXT NOT NULL
         )"""
         try:
-            with self.transaction():
-                exists = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_threads'").fetchone()
-                if exists and 'retry_not_before' not in {
-                        row['name'] for row in self.db.execute('PRAGMA table_xinfo(relay_threads)')}:
-                    # Accept only the exact old contract before rebuilding its CHECK.
-                    # DDL and the copy share one transaction; foreign keys stay enabled.
-                    self._validate_route_schema(old_route_sql, legacy=True)
-                    self._validate_route_migration_dependencies()
-                    self.db.execute(route_sql.replace('IF NOT EXISTS ', '').replace(
-                        'relay_threads (', 'relay_threads_cooldown ('))
-                    self.db.execute("""INSERT INTO relay_threads_cooldown
-                        SELECT capture_id,thread_id,state,attempt_started_at,failure_code,NULL
-                        FROM relay_threads""")
-                    self.db.execute('DROP TABLE relay_threads')
-                    self.db.execute('ALTER TABLE relay_threads_cooldown RENAME TO relay_threads')
-                else:
-                    self.db.execute(route_sql)
+            existing = {
+                row['name'] for row in self.db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
+                    "('relay_requests','relay_audio_grants','relay_threads','relay_thread_resets')"
+                )
+            }
+            if existing == {'relay_requests', 'relay_audio_grants', 'relay_threads', 'relay_thread_resets'} and (
+                'retry_not_before' in {row['name'] for row in self.db.execute('PRAGMA table_xinfo(relay_threads)')}
+            ):
                 self._validate_route_schema(route_sql)
-                self.db.execute(reset_sql)
                 self._validate_reset_schema(reset_sql)
                 if self.db.execute('PRAGMA foreign_key_check').fetchone() is not None:
                     raise RuntimeError('incompatible relay thread foreign key schema')
+            else:
+                self.db.execute('''CREATE TABLE IF NOT EXISTS relay_requests (
+                    capture_id INTEGER PRIMARY KEY REFERENCES captures(id),
+                    guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, approver_id TEXT NOT NULL,
+                    transcript TEXT NOT NULL, digest TEXT NOT NULL, nonce TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL, audio_expires_at INTEGER NOT NULL,
+                    state TEXT NOT NULL, message_id TEXT UNIQUE
+                )''')
+                self.db.execute('''CREATE TABLE IF NOT EXISTS relay_audio_grants (
+                    capture_id INTEGER NOT NULL REFERENCES captures(id), actor_id TEXT NOT NULL,
+                    guild_id TEXT NOT NULL, chat_id TEXT NOT NULL, message_id TEXT NOT NULL,
+                    profile TEXT NOT NULL, kind TEXT NOT NULL, capture_channel_id TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL, used INTEGER NOT NULL,
+                    PRIMARY KEY(message_id,kind)
+                )''')
+                with self.transaction():
+                    exists = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='relay_threads'").fetchone()
+                    if exists and 'retry_not_before' not in {
+                            row['name'] for row in self.db.execute('PRAGMA table_xinfo(relay_threads)')}:
+                        # Accept only the exact old contract before rebuilding its CHECK.
+                        # DDL and the copy share one transaction; foreign keys stay enabled.
+                        self._validate_route_schema(old_route_sql, legacy=True)
+                        self._validate_route_migration_dependencies()
+                        self.db.execute(route_sql.replace('IF NOT EXISTS ', '').replace(
+                            'relay_threads (', 'relay_threads_cooldown ('))
+                        self.db.execute("""INSERT INTO relay_threads_cooldown
+                            SELECT capture_id,thread_id,state,attempt_started_at,failure_code,NULL
+                            FROM relay_threads""")
+                        self.db.execute('DROP TABLE relay_threads')
+                        self.db.execute('ALTER TABLE relay_threads_cooldown RENAME TO relay_threads')
+                    else:
+                        self.db.execute(route_sql)
+                    self._validate_route_schema(route_sql)
+                    self.db.execute(reset_sql)
+                    self._validate_reset_schema(reset_sql)
+                    if self.db.execute('PRAGMA foreign_key_check').fetchone() is not None:
+                        raise RuntimeError('incompatible relay thread foreign key schema')
         except BaseException:
             self.db.close()
             raise
@@ -200,10 +213,9 @@ class RelayStore:
                               approver_id: str, now_ms: int) -> Request | None:
         # One bounded examination pass; None can leave eligible work for later ticks.
         scope = dict(guild_id=guild_id, channel_id=channel_id, approver_id=approver_id, now_ms=now_ms)
-        with self.transaction():
-            if self.thread_global_retry_not_before(**scope) is not None:
-                return None
-            rows = self.db.execute("""SELECT r.* FROM relay_requests r
+        if self.thread_global_retry_not_before(**scope) is not None:
+            return None
+        candidate_where = """FROM relay_requests r
                 JOIN relay_threads t ON t.capture_id=r.capture_id
                 WHERE r.state='approved_waiting' AND r.message_id IS NOT NULL
                 AND ((t.state='unbound' AND t.attempt_started_at IS NULL
@@ -217,8 +229,16 @@ class RelayStore:
                     AND (t.thread_id IS NULL OR (t.thread_id=r.message_id
                         AND length(t.thread_id) BETWEEN 17 AND 20
                         AND t.thread_id NOT GLOB '*[^0-9]*'))))
-                AND r.guild_id=? AND r.channel_id=? AND r.approver_id=?
-                ORDER BY r.capture_id LIMIT 100""", (now_ms, guild_id, channel_id, approver_id))
+                AND r.guild_id=? AND r.channel_id=? AND r.approver_id=?"""
+        if self.db.execute(f"SELECT 1 {candidate_where} LIMIT 1",
+                           (now_ms, guild_id, channel_id, approver_id)).fetchone() is None:
+            return None
+        with self.transaction():
+            if self.thread_global_retry_not_before(**scope) is not None:
+                return None
+            rows = self.db.execute(
+                f"SELECT r.* {candidate_where} ORDER BY r.capture_id LIMIT 100",
+                (now_ms, guild_id, channel_id, approver_id))
             for row in rows:
                 req = Request(**dict(row))
                 if self._thread_authorized(req, **scope):
@@ -525,6 +545,35 @@ class RelayStore:
             (guild_id, channel_id, approver_id, after)).fetchall()
         return [Request(**dict(row)) for row in rows]
 
+    def cards_with_routes(self, *, guild_id: str, channel_id: str, approver_id: str,
+                          after: int = 0) -> list[tuple[Request, Route | None]]:
+        rows = self.db.execute("""SELECT r.capture_id, r.guild_id, r.channel_id, r.approver_id,
+            r.transcript, r.digest, r.nonce, r.expires_at, r.audio_expires_at, r.state, r.message_id,
+            t.capture_id AS rt_capture_id, t.thread_id AS rt_thread_id, t.state AS rt_state,
+            t.attempt_started_at AS rt_attempt_started_at, t.failure_code AS rt_failure_code,
+            t.retry_not_before AS rt_retry_not_before
+            FROM relay_requests r
+            LEFT JOIN relay_threads t ON t.capture_id=r.capture_id
+            WHERE r.guild_id=? AND r.channel_id=? AND r.approver_id=?
+            AND r.message_id IS NOT NULL AND r.capture_id>?
+            ORDER BY r.capture_id LIMIT 100""",
+            (guild_id, channel_id, approver_id, after)).fetchall()
+        result: list[tuple[Request, Route | None]] = []
+        for row in rows:
+            req = Request(
+                capture_id=row['capture_id'], guild_id=row['guild_id'],
+                channel_id=row['channel_id'], approver_id=row['approver_id'],
+                transcript=row['transcript'], digest=row['digest'], nonce=row['nonce'],
+                expires_at=row['expires_at'], audio_expires_at=row['audio_expires_at'],
+                state=row['state'], message_id=row['message_id'])
+            route = (Route(
+                capture_id=row['rt_capture_id'], thread_id=row['rt_thread_id'],
+                state=row['rt_state'], attempt_started_at=row['rt_attempt_started_at'],
+                failure_code=row['rt_failure_code'], retry_not_before=row['rt_retry_not_before'])
+                if row['rt_capture_id'] is not None else None)
+            result.append((req, route))
+        return result
+
     def get(self, capture_id: int) -> Request | None:
         row = self.db.execute('SELECT * FROM relay_requests WHERE capture_id=?', (capture_id,)).fetchone()
         return Request(**dict(row)) if row else None
@@ -536,13 +585,15 @@ class RelayStore:
         if any(not isinstance(value, str) or not re.fullmatch(r'[0-9]{17,20}', value)
                for value in (guild_id, channel_id, approver_id)):
             raise ValueError('invalid capture scope')
-        with self.transaction():
-            row = self.db.execute('''SELECT * FROM captures c WHERE c.state='pending'
+        pending_where = '''FROM captures c WHERE c.state='pending'
                 AND c.discord_uploaded=0 AND c.thread_id IS NULL AND c.hermes_session_id IS NULL
                 AND c.answer_text IS NULL AND c.capture_post_token IS NULL AND c.answer_post_token IS NULL
                 AND NOT EXISTS(SELECT 1 FROM capture_approvals a WHERE a.capture_id=c.id)
-                AND NOT EXISTS(SELECT 1 FROM relay_requests r WHERE r.capture_id=c.id)
-                ORDER BY c.id LIMIT 1''').fetchone()
+                AND NOT EXISTS(SELECT 1 FROM relay_requests r WHERE r.capture_id=c.id)'''
+        if self.db.execute(f'SELECT 1 {pending_where} LIMIT 1').fetchone() is None:
+            return None
+        with self.transaction():
+            row = self.db.execute(f'SELECT * {pending_where} ORDER BY c.id LIMIT 1').fetchone()
             if row is None:
                 return None
             transcript = row['transcript']
@@ -603,6 +654,11 @@ class RelayStore:
 
     def expire_due(self, *, guild_id: str, channel_id: str, approver_id: str,
                    now_ms: int) -> None:
+        if self.db.execute("""SELECT 1 FROM relay_requests
+            WHERE state IN ('pending','approved_waiting') AND expires_at<=?
+            AND guild_id=? AND channel_id=? AND approver_id=? LIMIT 1""",
+            (now_ms, guild_id, channel_id, approver_id)).fetchone() is None:
+            return
         with self.transaction():
             self.db.execute("""UPDATE relay_requests SET state='expired'
                 WHERE state IN ('pending','approved_waiting') AND expires_at<=?
